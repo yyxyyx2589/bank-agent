@@ -155,7 +155,7 @@ def score_tool_accuracy(trace: list, expected_tools: list) -> dict:
             "param_accuracy": round(param_acc, 3)}
 
 
-def evaluate(baseline: str, data: list, components: dict) -> list:
+def evaluate(baseline: str, data: list, components: dict, verbose: bool = True) -> list:
     results = []
     for item in data:
         q = item["question"]
@@ -197,9 +197,10 @@ def evaluate(baseline: str, data: list, components: dict) -> list:
             "sim": out.get("sim", 0),
             "tools_called": [s["name"] for s in (out.get("tool_trace") or [])],
         })
-        print(f"  [{item['qid']}] {baseline:8} score={answer_score} "
-              f"route={actual_route}({expected_route}) "
-              f"turns={out.get('turns', 0)} {out['latency_ms']}ms")
+        if verbose:
+            print(f"  [{item['qid']}] {baseline:8} score={answer_score} "
+                  f"route={actual_route}({expected_route}) "
+                  f"turns={out.get('turns', 0)} {out['latency_ms']}ms")
     return results
 
 
@@ -217,15 +218,58 @@ def aggregate(results: list) -> dict:
     }
 
 
+def mean_aggregate(runs: list) -> dict:
+    """多次运行的指标均值（count 取第一次，因为各次题数相同）。
+
+    按指标量纲分别取整：延迟是毫秒（整数）、轮次保留两位、比率保留三位。
+    统一 round(...,3) 会得到「平均延迟 2747.667 ms」这种没意义的精度。
+    """
+    out = {}
+    for k in runs[0]:
+        vals = [r[k] for r in runs]
+        if k == "count":
+            out[k] = vals[0]
+        elif k == "latency_ms_avg":
+            out[k] = round(sum(vals) / len(vals))
+        elif k == "turns_avg":
+            out[k] = round(sum(vals) / len(vals), 2)
+        else:
+            out[k] = round(sum(vals) / len(vals), 3)
+    return out
+
+
+def stability(runs: list) -> dict:
+    """稳定性：每个指标给出 均值 / 最小值 / 最大值。
+
+    为什么需要这个：LLM 有随机性，单跑一次的「100%」可能只是运气好。
+    面试官问「这个数字稳不稳」时，能答出极差比只会重复一个数字强得多。
+    """
+    out = {"runs": len(runs)}
+    if len(runs) < 2:
+        # 单次运行没有"波动"可言，不编造极差
+        return out
+    metrics = ["answer_score_avg", "route_accuracy_avg", "tool_accuracy_avg",
+               "param_accuracy_avg"]
+    for m in metrics:
+        vals = [r[m] for r in runs if m in r]
+        if vals:
+            out[m] = {"mean": round(sum(vals) / len(vals), 3),
+                      "min": min(vals), "max": max(vals)}
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline", default="agent",
                         choices=["agent", "rag", "rag_lora", "all"])
     parser.add_argument("--data", default=str(DATA_FILE))
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="重复 N 次并报告稳定性（均值/极差）；N>1 时明细只打第一次")
     args = parser.parse_args()
 
     data = load_eval_data(Path(args.data))
-    print(f"加载 {len(data)} 条测试问题")
+    print(f"加载 {len(data)} 条测试问题"
+          + (f"，重复 {args.repeat} 次" if args.repeat > 1 else ""))
 
     # 组装组件（需要 DEEPSEEK_API_KEY）
     from config import BASE_URL, MODEL, require_api_key
@@ -253,10 +297,23 @@ def main():
 
     for bl in baselines:
         print(f"\n=== 基线: {bl} ===")
-        results = evaluate(bl, data, components)
-        agg = aggregate(results)
-        all_results[bl] = {"aggregate": agg, "details": results}
-        print(f"  汇总: {agg}")
+        run_aggs, last_results = [], None
+        for i in range(args.repeat):
+            if args.repeat > 1:
+                print(f"  ---- 第 {i + 1}/{args.repeat} 次 ----")
+            results = evaluate(bl, data, components,
+                               verbose=(args.repeat == 1 or i == 0))
+            last_results = results
+            run_aggs.append(aggregate(results))
+            if args.repeat > 1:
+                print(f"       本次汇总: {run_aggs[-1]}")
+        entry = {"aggregate": mean_aggregate(run_aggs), "details": last_results}
+        if args.repeat > 1:
+            entry["runs"] = run_aggs
+            entry["stability"] = stability(run_aggs)
+            print(f"  稳定性: {json.dumps(entry['stability'], ensure_ascii=False)}")
+        all_results[bl] = entry
+        print(f"  汇总（{args.repeat} 次均值）: {entry['aggregate']}")
 
     out_file = REPORTS_DIR / "eval_report.json"
     with open(out_file, "w", encoding="utf-8") as f:

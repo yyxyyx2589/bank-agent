@@ -69,17 +69,22 @@
 每题标注期望要点、期望工具与期望路由。
 
 ```
-python eval.py --baseline all      # 需 DEEPSEEK_API_KEY，约 40 次 LLM 调用
+python eval.py --baseline all --repeat 3     # 需 DEEPSEEK_API_KEY，约 120 次 LLM 调用
 ```
 
 | 指标 | 纯 RAG | **Bank Agent（本项目）** | 说明 |
 |---|---|---|---|
-| 端到端解决率 | 80.0% | **100%** | 答案命中标注要点的比例 |
+| 端到端解决率 | 78.3% | **100%** | 答案命中标注要点的比例 |
 | **路由准确率** | 35.0% | **100%** | 实际分支与期望分支一致的比例（合规差异的量化） |
 | 工具选择准确率 | — | **100%** | 期望工具被实际调用的比例 |
 | 参数生成准确率 | — | **100%** | 工具参数与标注匹配（字符串双向包含） |
-| 平均轮次 | 0.00 | 0.85 | Agent 达到答案的工具调用次数 |
-| 平均延迟 | 1097 ms | 3258 ms | 单题处理耗时（准确性的代价） |
+| 平均轮次 | 0.00 | 0.72 | Agent 达到答案的工具调用次数 |
+| 平均延迟 | 1261 ms | 2748 ms | 单题处理耗时（准确性的代价） |
+
+> 表中为 **3 次重复运行的均值**，不是单跑一次的结果。稳定性：Agent 的
+> 解决率 / 路由准确率 / 工具选择 / 参数准确率**四次运行四项全部极差为 0**
+> （即 100% 不是运气）；纯 RAG 的解决率在 **77.5% ~ 80.0%** 之间波动。
+> 这个差别本身就是「有据可依」与「靠模型即兴发挥」的差别。
 
 **这张表要讲的三件事：**
 
@@ -87,8 +92,8 @@ python eval.py --baseline all      # 需 DEEPSEEK_API_KEY，约 40 次 LLM 调�
    所有需要查工具的问题（B09/B10/B12/B13）它都直接硬答，答不出来；
    所有该转人工的超纲问题它也照答不误。
 2. **Agent 的差距全部来自「该查工具时能查」**：4 道题的 0 分 → 满分，
-   端到端解决率 80% → 100%。
-3. **延迟高 3 倍是诚实的代价**。银行场景里，多花 2 秒换「准确 + 可溯源 + 不越权」，
+   端到端解决率 78.3% → 100%。
+3. **延迟高 2 倍多是诚实的代价**。银行场景里，多花 1.5 秒换「准确 + 可溯源 + 不越权」，
    这个交换是划算的——所以这里没有把延迟藏起来。
 
 > 报告页 `web/report.html` 会读取 `reports/eval_report.json` 渲染成图表。
@@ -177,7 +182,8 @@ uvicorn server:app --reload --port 8000
 #   http://127.0.0.1:8000/report  三基线评估报告
 
 # 7) 评估
-python eval.py --baseline all
+python eval.py --baseline all              # 单次
+python eval.py --baseline all --repeat 3   # 3 次并报告稳定性（均值/极差）
 ```
 
 > 首次跑 `init_chroma.py` 需要联网下载 `paraphrase-multilingual-MiniLM-L12-v2`（约 470MB）；
@@ -192,7 +198,7 @@ python tests/test_eval_logic.py              # 评分逻辑
 python tests/test_agent_langgraph_parity.py  # 双引擎逐项等价性
 ```
 
-四个套件共 110 项断言，**零 API 消耗**（用 ScriptedLLM / StubLLM 驱动真实循环）。
+四个套件共 116 项断言，**零 API 消耗**（用 ScriptedLLM / StubLLM 驱动真实循环）。
 
 ---
 
@@ -255,7 +261,7 @@ bank-agent/
 │   ├── init_chroma.py          # 知识库导入（24 条）
 │   └── db.py                   # 查询函数：query_tickets / get_product / check_rule
 ├── tools/                      # 5 个工具 + 注册表
-├── tests/                      # 4 个测试套件（110 项断言，零 API 消耗）
+├── tests/                      # 4 个测试套件（116 项断言，零 API 消耗）
 ├── web/
 │   ├── index.html              # 对话界面（路由徽章 + 工具调用可视化）
 │   └── report.html             # 评估报告页

@@ -12,7 +12,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from eval import score_answer, score_tool_accuracy, aggregate
+from eval import (score_answer, score_tool_accuracy, aggregate,
+                  mean_aggregate, stability)
 
 
 def check(label, cond):
@@ -92,8 +93,34 @@ def test_aggregate():
     assert check("计数 2", agg["count"] == 2)
 
 
+def test_stability():
+    """多次运行的均值与极差（--repeat N 用）。"""
+    runs = [
+        {"count": 20, "answer_score_avg": 1.0, "route_accuracy_avg": 1.0,
+         "tool_accuracy_avg": 1.0, "param_accuracy_avg": 1.0,
+         "turns_avg": 0.8, "latency_ms_avg": 3200},
+        {"count": 20, "answer_score_avg": 0.95, "route_accuracy_avg": 1.0,
+         "tool_accuracy_avg": 1.0, "param_accuracy_avg": 0.95,
+         "turns_avg": 0.9, "latency_ms_avg": 3400},
+    ]
+    m = mean_aggregate(runs)
+    assert check("均值：答案分 0.975", m["answer_score_avg"] == 0.975)
+    assert check("均值：count 取第一次（20）", m["count"] == 20)
+
+    st = stability(runs)
+    assert check("稳定性：运行次数 2", st["runs"] == 2)
+    assert check("稳定性：答案分 min/max 正确",
+                 st["answer_score_avg"] == {"mean": 0.975, "min": 0.95, "max": 1.0})
+    assert check("稳定性：路由准确率极差为 0（完全稳定）",
+                 st["route_accuracy_avg"]["min"] == st["route_accuracy_avg"]["max"] == 1.0)
+
+    # 单次运行不产出稳定性块
+    assert check("单次运行不产出稳定性", stability([runs[0]]) == {"runs": 1})
+
+
 if __name__ == "__main__":
-    for fn in [test_score_answer, test_score_tool_accuracy, test_aggregate]:
+    for fn in [test_score_answer, test_score_tool_accuracy, test_aggregate,
+               test_stability]:
         print(f"\n--- {fn.__name__} ---")
         fn()
     print("\n全部通过：评估评分逻辑正确。")
