@@ -269,6 +269,12 @@ function send(query){
     doneData = d;
     renderSources(d.kb_hits);
     updateStats(d.route, d.sim, d.kw_coverage);
+    // 兜底采用服务端回带的会话号：若页面加载时 /api/sessions/new 失败了，
+    // sessionId 会一直为空，那样每轮都会新建会话、记忆静默丢失。
+    if (!sessionId && d.session_id) {
+      sessionId = d.session_id;
+      $("sid").textContent = sessionId;
+    }
     es.close();
     sendBtn.disabled = false;
     input.focus();

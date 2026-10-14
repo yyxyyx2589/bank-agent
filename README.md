@@ -171,7 +171,7 @@ python db/init_db.py        # 业务数据库 → db/bank.db
 python db/init_chroma.py    # 知识库     → data/chroma/（首次需联网下载 embedding 模型）
 
 # 4) 一键自检（最推荐的第一步）
-python verify.py            # 4 个测试套件 + API key + 三条路由真实对话
+python verify.py            # 4 个测试套件 + API key + 三条路由（真实 HTTP + SSE + 会话记忆）
 
 # 5) 命令行对话
 python cli.py
@@ -198,7 +198,11 @@ python tests/test_eval_logic.py              # 评分逻辑
 python tests/test_agent_langgraph_parity.py  # 双引擎逐项等价性
 ```
 
-四个套件共 116 项断言，**零 API 消耗**（用 ScriptedLLM / StubLLM 驱动真实循环）。
+四个套件共 126 项断言，**零 API 消耗**（用 ScriptedLLM / StubLLM 驱动真实循环）。
+
+`python verify.py` 在此之上再覆盖 **Web 层**：临时起本地服务，走真实 HTTP + SSE，
+校验三条路由、SSE 事件序列完整性（`route → [tool_call → tool_result]* → answer_chunk → answer_done → done`）
+与会话记忆持久化（同一 session 两轮后历史 4 条）。
 
 ---
 
@@ -261,7 +265,7 @@ bank-agent/
 │   ├── init_chroma.py          # 知识库导入（24 条）
 │   └── db.py                   # 查询函数：query_tickets / get_product / check_rule
 ├── tools/                      # 5 个工具 + 注册表
-├── tests/                      # 4 个测试套件（116 项断言，零 API 消耗）
+├── tests/                      # 4 个测试套件（126 项断言，零 API 消耗）
 ├── web/
 │   ├── index.html              # 对话界面（路由徽章 + 工具调用可视化）
 │   └── report.html             # 评估报告页

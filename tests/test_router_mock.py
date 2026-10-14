@@ -103,9 +103,56 @@ def test_agent_loop():
     print(f"    (sim={result.sim:.3f}, kw={result.kw_coverage:.3f})")
 
 
+def test_override_predicates():
+    """两个「高置信但不该直答」的判定函数 + 行外护栏。
+
+    直接测判定函数本身而不依赖检索分数：检索分数会随知识库演进而漂移，
+    判定规则才是设计意图所在，必须锁死。
+    """
+    router = build_router(StubLLM())
+
+    # 数字类：知识库只给区间，精确值在产品参数表
+    assert check("数字类：问具体费率 -> 需查参数表",
+                 router._needs_live_data("信用卡分 12 期的手续费率是多少"))
+    assert check("数字类：问办理流程 -> 不应触发（知识库答得了）",
+                 not router._needs_live_data("银行卡丢了怎么补办"))
+
+    # 判定类：制度口径模糊，逐条判定在业务规则表
+    assert check("判定类：带具体金额 -> 需查规则表",
+                 router._needs_rule_check("客户要转 60 万，需要提前预约吗"))
+    assert check("判定类：问能否代办 -> 需查规则表",
+                 router._needs_rule_check("银行卡挂失可以让人代办吗"))
+    assert check("判定类：泛问规定（无金额无条件词）-> 不应触发",
+                 not router._needs_rule_check("大额转账要预约吗"))
+
+    # 行外护栏：合规红线
+    assert check("行外护栏：荐股 -> 命中", router._is_out_of_scope("帮我推荐一只股票"))
+    assert check("行外护栏：正常业务 -> 不命中",
+                 not router._is_out_of_scope("基金定投怎么赎回"))
+
+
+def test_high_conf_but_should_not_answer_directly():
+    """端到端验证：高置信也照样改走 agent_loop。
+
+    这是本项目与「普通 RAG」最本质的区别——置信度高不等于该由知识库直接答。
+    """
+    # ① 问具体数字：sim 高（命中 kb-008），但精确值在产品表
+    llm = StubLLM()
+    router = build_router(llm)
+    r1 = router.route("信用卡分 12 期的手续费率是多少")
+    assert check("高置信 + 问具体数字 -> agent_loop", r1.route == "agent_loop")
+    assert check("  且确实是高置信（否则测不到该分支）", r1.sim >= SIM_HIGH)
+
+    # ② 带具体条件：sim 高（命中 kb-006），但逐条判定在规则表
+    llm2 = StubLLM()
+    r2 = build_router(llm2).route("客户要转 60 万，需要提前预约吗")
+    assert check("高置信 + 带具体金额 -> agent_loop", r2.route == "agent_loop")
+
+
 if __name__ == "__main__":
     for fn in [test_rag_direct, test_refuse_human, test_out_of_scope_guard,
-               test_agent_loop]:
+               test_agent_loop, test_override_predicates,
+               test_high_conf_but_should_not_answer_directly]:
         print(f"\n--- {fn.__name__} ---")
         fn()
-    print("\n全部通过：决策路由三条分支 + 行外护栏逻辑正确。")
+    print("\n全部通过：决策路由三条分支 + 行外护栏 + 两类直答改写逻辑正确。")

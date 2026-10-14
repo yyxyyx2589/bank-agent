@@ -8,7 +8,7 @@
   event: tool_result  data: {name, result}                工具结果
   event: answer_chunk data: {content}                     答案片段（打字机）
   event: answer_done  data: {}                            答案结束
-  event: done         data: {route, answer, sim, ...}    完整结果（含 kb_hits）
+  event: done         data: {route, answer, sim, ..., session_id}  完整结果（含 kb_hits）
   event: error        data: {message}                     错误
 
 会话记忆：SQLite 持久化（db/bank.db 的 sessions 表），重启不丢。
@@ -85,8 +85,8 @@ def build_router(event_hook=None) -> Router:
 
 
 
-def _result_to_dict(result) -> dict:
-    return {
+def _result_to_dict(result, session_id: str = None) -> dict:
+    d = {
         "route": result.route,
         "answer": result.answer,
         "sim": result.sim,
@@ -94,6 +94,12 @@ def _result_to_dict(result) -> dict:
         "tool_trace": result.tool_trace,
         "kb_hits": result.kb_hits,
     }
+    if session_id:
+        # 回带会话号：客户端本应先用 POST /api/sessions/new 取号，但若那一步失败，
+        # 它会带着空 session_id 请求，服务端只能自造一个——历史就被孤立且静默丢记忆。
+        # 把服务端实际使用的 session_id 回传给客户端，客户端可兜底采用。
+        d["session_id"] = session_id
+    return d
 
 
 @app.get("/")
@@ -139,7 +145,7 @@ def chat_stream(query: str = Query(...), session_id: str = Query("")):
             # 保存本轮对话到 SQLite（持久化）
             save_message(session_id, "user", query)
             save_message(session_id, "assistant", result.answer)
-            q.put(("done", _result_to_dict(result)))
+            q.put(("done", _result_to_dict(result, session_id)))
         except Exception as e:
             q.put(("error", {"message": str(e)}))
 
