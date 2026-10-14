@@ -176,6 +176,7 @@ python eval.py --baseline all --repeat 3   # 需 DEEPSEEK_API_KEY，约 200 次 
 自建的银行域 adapter，在 RTX 4060 Laptop 上 **5.4 分钟**训完。
 
 ```
+pip install -r requirements-train.txt   # 训练路径的额外依赖（torch/transformers/peft/trl…）
 python training/build_sft.py     # 造训练数据（含两道泄漏防护闸门）
 python training/train_lora.py    # 微调：303 条 / 5 epoch / 100 步 / 5.4 分钟
 python eval.py --baseline all --repeat 3
@@ -435,12 +436,15 @@ bank-agent/
 ├── web/
 │   ├── index.html              # 对话界面（路由徽章 + 工具调用可视化）
 │   └── report.html             # 评估报告页
+├── requirements.txt            # 运行依赖（Agent 本体）
+├── requirements-train.txt      # 训练依赖（仅复现中间基线/消融时需装）
 ├── data/
 │   ├── eval_questions.jsonl    # 21 题评估集（含期望要点/工具/路由标注）
 │   ├── bank_sft_raw.jsonl      # 训练数据可读版（可审计：喂了什么给模型）
 │   └── chroma/                 # 向量库（gitignore，可重建）
-├── reports/eval_report.json    # 评估结果
+├── reports/eval_report.json    # 评估结果（三基线 × 六指标）
 ├── reports/lora_train.json     # 训练记录（超参 / loss 曲线 / 耗时）
+├── reports/ablation_base.json  # 消融记录（纯基座不挂 adapter）
 └── docs/场景设计.md             # 场景选型依据（含 2026 年银行 AI 落地公开数据）
     └── images/                 # 实跑截图（01 工具循环 / 02 评估报告 / 03 资金安全转接）
 ```

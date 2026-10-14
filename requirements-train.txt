@@ -1,0 +1,18 @@
+# ── 训练路径专用依赖 ──────────────────────────────────────────────
+# 只有「复现 RAG+LoRA 中间基线 / 消融实验」（本地小模型训练与推理）才需要。
+# 跑 Agent 本体（server / cli / eval --baseline agent|rag）**不需要**装这些。
+#
+# 验证环境：Python 3.10 · CUDA 12.4 · RTX 4060 Laptop 8GB · Windows
+# 纯 CPU 也能跑（train_lora.py 自动降级到 fp32），只是慢很多。
+#
+# 版本下限按代码实际用到的 API 定的，不是随手写的：
+#   · transformers 用了 from_pretrained(dtype=...) —— 该关键字 4.56+ 才取代 torch_dtype
+#   · trl 用了 1.x 的 SFTConfig / SFTTrainer（0.x 的配置类路径不同）
+#   · peft 用了 PeftModel.from_pretrained + LoraConfig（0.13+ 稳定）
+torch>=2.1
+transformers>=4.56
+peft>=0.13
+datasets>=3.0
+trl>=1.0
+accelerate>=1.0
+numpy>=1.24
