@@ -44,6 +44,8 @@
     line-height: 1.6; white-space: pre-wrap; word-break: break-word;
   }
   .msg.user .bubble { background: #eef3ff; border-color: #d6e0ff; }
+  /* 模型答案里的 --- 分隔线（见 mdLite）：默认 <hr> 太重，压细一点 */
+  .msg .bubble hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
 
   .badge {
     display: inline-flex; align-items: center; gap: 6px;
@@ -59,14 +61,21 @@
               padding-left: 14px; }
   .step { margin-bottom: 10px; font-size: 13px; }
   .step .st-head { display: flex; align-items: center; gap: 6px; }
-  .step .st-name { font-weight: 600; color: var(--accent); }
-  .step .st-params { color: var(--text-dim); font-family: monospace; font-size: 12px; }
+  .step .st-name { font-weight: 600; color: var(--accent); flex: 0 0 auto; }
+  /* 参数可能很长（escalate_to_human 的 reason 是一整句话），必须自己收缩+省略，
+     否则会把"展开结果"挤成竖排单字（截图里见过）。 */
+  .step .st-params {
+    color: var(--text-dim); font-family: monospace; font-size: 12px;
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .step .st-result {
     margin-top: 4px; font-family: monospace; font-size: 12px;
     background: #f5f6f7; border-radius: 4px; padding: 6px 8px;
     white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto;
   }
-  .step .toggle { cursor: pointer; color: var(--text-dim); font-size: 11px; }
+  .step .toggle { cursor: pointer; color: var(--text-dim); font-size: 11px;
+                  flex: 0 0 auto; white-space: nowrap; }
 
   .src-item { font-size: 12px; margin-bottom: 10px; padding: 8px;
               background: #f5f6f7; border-radius: 6px; }
@@ -152,6 +161,18 @@ const sendBtn = $("send-btn");
 
 function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 
+/* 轻量 markdown 渲染：模型答案里带 **加粗** 和换行/列表，直接 textContent 会把
+   ** 原样显示（截图里很明显）。只支持三种，先 esc 再替换，不引入任何库。
+   为什么不用完整 markdown 解析器：答案来自模型，任何 innerHTML 都有 XSS 面，
+   支持得越少越安全；银行场景宁可少渲染也不要注入。 */
+function mdLite(s){
+  return esc(s)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^\s*[-*]{3,}\s*$/gm, "<hr>")   // 模型爱用 --- 当分隔线
+    .replace(/^[-*]\s+/gm, "· ")
+    .replace(/\n/g, "<br>");
+}
+
 function scrollBottom(){ msgs.scrollTop = msgs.scrollHeight; }
 
 function addUser(text){
@@ -161,6 +182,15 @@ function addUser(text){
 }
 
 function startAssistant(){
+  // 上一轮"当前消息"的锚点 id 必须先摘掉。
+  // 为什么：每轮都新建同样 id 的元素，而 getElementById 永远只返回**第一个**匹配，
+  // 于是从第二轮起，路由徽章 / 工具时间线 / 答案会全部渲染进第一轮的 DOM ——
+  // 界面看着"第二轮没反应"，实际是覆盖到了上面。
+  // （多轮记忆是 HTTP 层测试覆盖得到的，浏览器里才看得出来，所以要在这里兜住。）
+  for (const id of ["cur-msg", "cur-badge", "cur-timeline", "cur-bubble"]){
+    const el = $(id);
+    if (el) el.removeAttribute("id");
+  }
   const d = document.createElement("div"); d.className = "msg assistant";
   d.id = "cur-msg";
   d.innerHTML = `<div class="role">助手</div>
@@ -202,8 +232,12 @@ function addTimelineStep(name, params, result){
 }
 
 function appendAnswer(chunk){
-  $("cur-bubble").classList.add("typing");
-  $("cur-bubble").textContent += chunk;
+  const b = $("cur-bubble");
+  b.classList.add("typing");
+  // 累积原始文本再整体重渲染：加粗标记可能跨 chunk 断开，
+  // 逐块渲染会把 ** 显示出来（流式渲染的经典坑）。
+  b.dataset.raw = (b.dataset.raw || "") + chunk;
+  b.innerHTML = mdLite(b.dataset.raw);
   scrollBottom();
 }
 
