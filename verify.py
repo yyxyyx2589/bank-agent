@@ -6,12 +6,13 @@
 流程：
   1. 四个测试套件（零 API 消耗）
   2. API key 检查（.env 或环境变量，没有则停在步骤 1）
-  3. 真实对话验证（约 5 次 LLM 调用，几分钱内）：临时起一个本地服务，
+  3. 真实对话验证（约 6 次 LLM 调用，几分钱内）：临时起一个本地服务，
      走**真实 HTTP + SSE**（而非直接调 Router），覆盖 FastAPI 路由、SSE 事件序列、
      会话记忆持久化这几层：
      - "银行卡丢了怎么补办"                 -> 期望 rag_direct
      - "你们网点附近哪里有好吃的火锅"       -> 期望 refuse_human
-     - "客户要转 60 万，需要提前预约吗"      -> 期望 agent_loop + 工具调用
+     - "客户要转 60 万，需要提前预约吗"      -> 期望 agent_loop + check_business_rule
+     - "我的卡被盗刷了，这笔钱不是我取的"    -> 期望 agent_loop + escalate_to_human（硬约束）
      - 同一 session 连续两轮               -> 期望历史累积到 4 条
 """
 import subprocess
@@ -54,12 +55,12 @@ def check_key():
 
 
 def verify_real_chat():
-    """三条路由的真实对话验证 —— 走真实 HTTP + SSE，而不是直接调 Router。
+    """四条路由的真实对话验证 —— 走真实 HTTP + SSE，而不是直接调 Router。
 
     为什么坚持走 HTTP：直接调 router.route() 会绕过 FastAPI 路由、SSE 事件序列、
     会话记忆这几层。这些层恰恰是演示时真正跑的东西，必须由自检覆盖。
     """
-    step("步骤 3/3：真实对话三条路由验证（HTTP + SSE）")
+    step("步骤 3/3：真实对话四条路由验证（HTTP + SSE）")
 
     import json
     import threading
@@ -107,21 +108,28 @@ def verify_real_chat():
         return events
 
     cases = [
-        ("银行卡丢了怎么补办", "rag_direct"),
-        ("你们网点附近哪里有好吃的火锅", "refuse_human"),
-        ("客户要转 60 万，需要提前预约吗", "agent_loop"),
+        ("银行卡丢了怎么补办", "rag_direct", None),
+        ("你们网点附近哪里有好吃的火锅", "refuse_human", None),
+        ("客户要转 60 万，需要提前预约吗", "agent_loop", "check_business_rule"),
+        # 资金安全：路由层用 tool_choice 强制首轮调用 escalate_to_human，
+        # 所以这里不仅校验路由，还校验"工具真的被调用了"——这是硬约束是否生效的判据。
+        ("我的卡被盗刷了，这笔钱不是我取的", "agent_loop", "escalate_to_human"),
     ]
     ok = True
     try:
-        for query, expected in cases:
+        for query, expected, required_tool in cases:
             ev = sse(query)
             kinds = [e for e, _ in ev]
             done = next((d for e, d in ev if e == "done"), {})
+            called = [t.get("name") for t in (done.get("tool_trace") or [])]
             hit = "PASS" if done.get("route") == expected else "WARN"
             print(f"  [{hit}] {query[:22]:24} -> {done.get('route')}"
-                  f"（期望 {expected}，工具 {len(done.get('tool_trace') or [])} 次）")
+                  f"（期望 {expected}，工具 {called or '无'}）")
             print(f"        事件: {' → '.join(kinds)}")
             if done.get("route") != expected:
+                ok = False
+            if required_tool and required_tool not in called:
+                print(f"        [FAIL] 未调用期望工具 {required_tool}")
                 ok = False
             # SSE 协议完整性：必须有 route 起始事件、done 收尾、且带 session_id
             if not ("route" in kinds and kinds[-1] == "done"

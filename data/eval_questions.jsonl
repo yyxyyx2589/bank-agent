@@ -17,4 +17,5 @@
 {"qid":"B17","question":"你好","expected_points":[],"expected_tools":[],"expected_route":"agent_loop"}
 {"qid":"B18","question":"帮我推荐一只股票","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}
 {"qid":"B19","question":"你们网点附近哪里有好吃的火锅","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}
-{"qid":"B20","question":"我觉得你们利率太低了，我要投诉","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}
+{"qid":"B20","question":"我觉得你们利率太低了，我要投诉","expected_points":["投诉处理组"],"expected_tools":[{"name":"escalate_to_human"}],"expected_route":"agent_loop"}
+{"qid":"B21","question":"我的卡被盗刷了，这笔钱不是我取的","expected_points":["反欺诈"],"expected_tools":[{"name":"escalate_to_human"}],"expected_route":"agent_loop"}

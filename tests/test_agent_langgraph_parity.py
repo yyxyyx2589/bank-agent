@@ -37,8 +37,9 @@ class SnapshotLLM(ScriptedLLM):
     快照之后，"第 i 次请求时模型实际看到了什么"才是可比的。
     """
 
-    def chat(self, messages, tools=None, stream=False):
-        self.calls.append({"messages": copy.deepcopy(messages), "tools": tools})
+    def chat(self, messages, tools=None, stream=False, tool_choice=None):
+        self.calls.append({"messages": copy.deepcopy(messages), "tools": tools,
+                           "tool_choice": tool_choice})
         if self.script:
             return self.script.pop(0)
         return make_response(content="（兜底总结回答）")
@@ -241,6 +242,57 @@ def test_p8_history_injection():
               roles == ["system", "user", "assistant", "user"])
 
 
+# --------------------------------------------------------------------- 场景
+
+def test_p11_force_tool_parity():
+    """首轮 tool_choice 硬约束：两种编排必须同样只在首轮强制、同样执行工具。
+
+    这是收口期为「资金安全 → 立即转人工」加的确定性路径（见 agent.Agent.run 的
+    force_tool）。如果只有手写版支持、LangGraph 版漏了，图编排就与手写版行为漂移，
+    "换编排层不动业务层"这句话就不成立——所以必须进对照测试。
+    """
+    def build_script():
+        return [
+            make_response(tool_calls=[make_tool_call(
+                "call_1", "escalate_to_human",
+                '{"reason": "客户报告账户疑似被盗刷", "priority": "紧急"}')]),
+            make_response(content="已紧急转接反欺诈组，请保持通话。"),
+        ]
+
+    got = {}
+    for engine in ("手写版", "LangGraph"):
+        recorder = Recorder()
+        llm = SnapshotLLM(build_script())
+        got[engine] = (build(engine, llm, recorder).run(
+            "我的卡被盗刷了", force_tool="escalate_to_human"), llm.calls)
+
+    a, b = got["手写版"], got["LangGraph"]
+    expected = {"type": "function", "function": {"name": "escalate_to_human"}}
+
+    check("p11 两版首轮 tool_choice 一致且指向 escalate_to_human",
+          a[1][0]["tool_choice"] == b[1][0]["tool_choice"] == expected)
+    check("p11 两版次轮都恢复自由（tool_choice 为 None）",
+          a[1][1]["tool_choice"] is None and b[1][1]["tool_choice"] is None)
+    # 注意：escalate_to_human 每次生成随机转接单号 + 当前时间，结果串天然不同，
+    # 因此这里比对"轨迹结构"（工具名 + 入参）而不是结果原文——
+    # 要断言的是两种编排做了同样的事，不是同一个工单号。
+    check("p11 工具轨迹结构一致（工具名 + 入参）",
+          [(t["name"], t["params"]) for t in a[0].tool_trace]
+          == [(t["name"], t["params"]) for t in b[0].tool_trace]
+          == [("escalate_to_human",
+               {"reason": "客户报告账户疑似被盗刷", "priority": "紧急"})])
+    check("p11 两版都真的生成了转接单",
+          "transfer_no" in a[0].tool_trace[0]["result"]
+          and "transfer_no" in b[0].tool_trace[0]["result"])
+    check("p11 最终答案一致", a[0].answer == b[0].answer)
+
+    # 反向对照：不给 force_tool 时首轮不该带 tool_choice（避免默认路径被误伤）
+    llm = SnapshotLLM([make_response(content="你好")])
+    build("LangGraph", llm, Recorder()).run("你好")
+    check("p11 不传 force_tool 时首轮 tool_choice 为 None",
+          llm.calls[0]["tool_choice"] is None)
+
+
 # ------------------------------------------------------- 路由函数可直接单测
 
 def test_p9_routing_functions_are_pure():
@@ -274,8 +326,9 @@ if __name__ == "__main__":
              test_p3_unknown_tool_defense, test_p4_bad_json_defense,
              test_p5_tool_exception_defense, test_p6_chitchat_no_tool,
              test_p7_max_turns_fallback, test_p8_history_injection,
+             test_p11_force_tool_parity,
              test_p9_routing_functions_are_pure, test_p10_graph_is_inspectable]
     for fn in tests:
         print(f"\n--- {fn.__name__} ---")
         fn()
-    print("\n全部通过：LangGraph 版与手写版在 10 个场景上行为等价。")
+    print("\n全部通过：LangGraph 版与手写版在 11 个场景上行为等价。")

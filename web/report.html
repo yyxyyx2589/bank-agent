@@ -83,8 +83,12 @@ const METRICS_TABLE = [
   { key: "param_accuracy_avg", name: "参数生成准确率", fmt: v => (v*100).toFixed(1) + "%" },
   { key: "turns_avg",          name: "平均轮次",       fmt: v => v.toFixed(2) },
   { key: "latency_ms_avg",     name: "平均延迟",       fmt: v => v + " ms" },
+  // 分路由延迟：整体均值会被"大多数题走直答"掩盖，看不出代价花在哪条路径上
+  { key: "latency_by_route",   name: "分路由延迟",     noBest: true,
+    fmt: v => Object.entries(v).map(([k, n]) => `${ROUTE_CN[k] || k} ${n}ms`).join(" / ") },
   { key: "count",              name: "测试条数",       fmt: v => v },
 ];
+const ROUTE_CN = { rag_direct: "直答", agent_loop: "工具循环", refuse_human: "转人工" };
 
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");}
 
@@ -123,11 +127,14 @@ function renderTable(data){
   let head = "<tr><th>指标</th>" + cols.map(bl => `<th>${BASE_META[bl].name}</th>`).join("") + "</tr>";
   let rows = "";
   for(const m of METRICS_TABLE){
-    // 找每行最优值（准确率类取最大，轮次/延迟取最小）
+    // 找每行最优值（准确率类取最大，轮次/延迟取最小）；noBest 行（如分路由延迟）不参与
     const vals = cols.map(bl => data[bl].aggregate[m.key]);
     const isLowerBetter = m.key === "turns_avg" || m.key === "latency_ms_avg";
-    let best = isLowerBetter ? Math.min(...vals.filter(v=>v!==undefined))
-                             : Math.max(...vals.filter(v=>v!==undefined));
+    let best;
+    if(!m.noBest){
+      best = isLowerBetter ? Math.min(...vals.filter(v=>v!==undefined))
+                           : Math.max(...vals.filter(v=>v!==undefined));
+    }
     rows += `<tr><td>${m.name}</td>` + cols.map((bl, i) => {
       const v = vals[i];
       const cell = v === undefined ? "—" : m.fmt(v);

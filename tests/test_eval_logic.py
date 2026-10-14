@@ -79,18 +79,35 @@ def test_score_tool_accuracy():
 def test_aggregate():
     results = [
         {"answer_score": 1.0, "tool_accuracy": 1.0, "param_accuracy": 1.0,
-         "route_accuracy": 1.0, "turns": 2, "latency_ms": 100},
+         "route_accuracy": 1.0, "turns": 2, "latency_ms": 100,
+         "route": "rag_direct"},
         {"answer_score": 0.5, "tool_accuracy": 0.5, "param_accuracy": 0.0,
-         "route_accuracy": 0.0, "turns": 4, "latency_ms": 300},
+         "route_accuracy": 0.0, "turns": 4, "latency_ms": 300,
+         "route": "agent_loop"},
+        {"answer_score": 1.0, "tool_accuracy": 1.0, "param_accuracy": 1.0,
+         "route_accuracy": 1.0, "turns": 1, "latency_ms": 500,
+         "route": "agent_loop"},
     ]
     agg = aggregate(results)
-    assert check("答案分均值 0.75", agg["answer_score_avg"] == 0.75)
-    assert check("路由准确率均值 0.5", agg["route_accuracy_avg"] == 0.5)
-    assert check("工具准确率均值 0.75", agg["tool_accuracy_avg"] == 0.75)
-    assert check("参数准确率均值 0.5", agg["param_accuracy_avg"] == 0.5)
-    assert check("平均轮次 3.0", agg["turns_avg"] == 3.0)
-    assert check("平均延迟 200ms", agg["latency_ms_avg"] == 200)
-    assert check("计数 2", agg["count"] == 2)
+    assert check("答案分均值 0.833", agg["answer_score_avg"] == 0.833)
+    assert check("路由准确率均值 0.667", agg["route_accuracy_avg"] == 0.667)
+    assert check("工具准确率均值 0.833", agg["tool_accuracy_avg"] == 0.833)
+    assert check("参数准确率均值 0.667", agg["param_accuracy_avg"] == 0.667)
+    assert check("平均轮次 2.33", agg["turns_avg"] == 2.33)
+    assert check("平均延迟 300ms", agg["latency_ms_avg"] == 300)
+    assert check("计数 3", agg["count"] == 3)
+    # 按路由分组：整体均值 300ms 掩盖了"直答 100ms / 循环 400ms"的差别
+    assert check("分路由延迟：直答 100ms",
+                 agg["latency_by_route"]["rag_direct"] == 100)
+    assert check("分路由延迟：循环 (300+500)/2=400ms",
+                 agg["latency_by_route"]["agent_loop"] == 400)
+
+    # 缺 route 字段（旧数据）不应崩，落到 unknown 组
+    agg_old = aggregate([{"answer_score": 1.0, "tool_accuracy": 1.0,
+                          "param_accuracy": 1.0, "route_accuracy": 1.0,
+                          "turns": 0, "latency_ms": 50}])
+    assert check("缺 route 字段不崩，归入 unknown",
+                 agg_old["latency_by_route"] == {"unknown": 50})
 
 
 def test_stability():
@@ -98,14 +115,18 @@ def test_stability():
     runs = [
         {"count": 20, "answer_score_avg": 1.0, "route_accuracy_avg": 1.0,
          "tool_accuracy_avg": 1.0, "param_accuracy_avg": 1.0,
-         "turns_avg": 0.8, "latency_ms_avg": 3200},
+         "turns_avg": 0.8, "latency_ms_avg": 3200,
+         "latency_by_route": {"rag_direct": 1500, "agent_loop": 4000}},
         {"count": 20, "answer_score_avg": 0.95, "route_accuracy_avg": 1.0,
          "tool_accuracy_avg": 1.0, "param_accuracy_avg": 0.95,
-         "turns_avg": 0.9, "latency_ms_avg": 3400},
+         "turns_avg": 0.9, "latency_ms_avg": 3400,
+         "latency_by_route": {"rag_direct": 1700, "agent_loop": 3600}},
     ]
     m = mean_aggregate(runs)
     assert check("均值：答案分 0.975", m["answer_score_avg"] == 0.975)
     assert check("均值：count 取第一次（20）", m["count"] == 20)
+    assert check("均值：分路由延迟逐键取均值",
+                 m["latency_by_route"] == {"rag_direct": 1600, "agent_loop": 3800})
 
     st = stability(runs)
     assert check("稳定性：运行次数 2", st["runs"] == 2)

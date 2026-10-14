@@ -39,6 +39,8 @@ max_turns 语义完全一致，可以互换使用（见 tests/test_agent_langgra
   - System Prompt、工具 schema、event_hook 事件协议（tool_call / tool_result /
     answer_chunk / answer_done）与手写版逐字一致，保证前端 SSE 与评估脚本
     （eval.py）零改动。
+  - force_tool（首轮 tool_choice 硬约束，用于资金安全类确定性转接）在两版里
+    都只在 turns == 0 生效，行为等价见 test_p11。
 """
 from __future__ import annotations
 
@@ -71,6 +73,8 @@ class AgentState(TypedDict):
     tool_trace: Annotated[list, operator.add]
     turns: int
     answer: Optional[str]
+    # 仅首轮生效：非空则首轮用 tool_choice 强制调用该工具（见 agent.Agent.run 的 force_tool）
+    force_tool: Optional[str]
 
 
 def execute_tool_safely(tool_map: dict, name: str, raw_arguments: str) -> str:
@@ -138,8 +142,18 @@ class LangGraphAgent:
         """② 发起请求（带全部工具 schema）。
 
         出口在这里分叉：没有 tool_calls 说明模型给出了最终答案。
+        force_tool 只在首轮（turns == 0）用 tool_choice 钉死工具调用，
+        与 agent.py 的 turn == 0 判断逐字对齐，保证两种编排行为等价。
         """
-        resp = self.llm.chat(state["messages"], tools=self._schemas)
+        choice = None
+        if state["turns"] == 0 and state.get("force_tool"):
+            choice = {"type": "function",
+                      "function": {"name": state["force_tool"]}}
+        if choice:
+            resp = self.llm.chat(state["messages"], tools=self._schemas,
+                                 tool_choice=choice)
+        else:
+            resp = self.llm.chat(state["messages"], tools=self._schemas)
         msg = resp.choices[0].message
 
         if not msg.tool_calls:
@@ -203,7 +217,8 @@ class LangGraphAgent:
 
     # ------------------------------------------------------------------ 运行
 
-    def run(self, user_message: str, history: list = None) -> AgentResult:
+    def run(self, user_message: str, history: list = None,
+            force_tool: str = None) -> AgentResult:
         messages = [{"role": "system", "content": self.system_prompt}]
         if history:  # 会话内多轮记忆：把之前轮次的 user/assistant 消息拼进去
             messages.extend(history)
@@ -213,7 +228,8 @@ class LangGraphAgent:
         # 一轮对话最多 2 步（agent + tools），再留出兜底与收尾的余量。
         config = {"recursion_limit": self.max_turns * 2 + 5}
         final = self.graph.invoke(
-            {"messages": messages, "tool_trace": [], "turns": 0, "answer": None},
+            {"messages": messages, "tool_trace": [], "turns": 0, "answer": None,
+             "force_tool": force_tool},
             config=config)
 
         return AgentResult(answer=final["answer"] or "",

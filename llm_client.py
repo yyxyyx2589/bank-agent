@@ -9,16 +9,18 @@ class LLMClient:
         self.model=model
 
     def chat(self, messages: list, tools: list | None = None,
-             stream: bool = False) -> object:
+             stream: bool = False, tool_choice: object = None) -> object:
         """调用 chat.completions.create。
-        - messages: OpenAI 消息格式
-        - tools:    OpenAI 工具 schema 列表（本周暂时不用，第 2 周接上）
-        - stream:   本周先 False，第 3 周再做流式
+        - messages:    OpenAI 消息格式
+        - tools:       OpenAI 工具 schema 列表
+        - stream:      流式开关（第 3 周 SSE 用）
+        - tool_choice: 约束本轮必须调用哪个工具。None = 模型自由决定；
+                       传 {"type":"function","function":{"name":...}} = 强制调用。
+                       用于「不允许模型犹豫」的确定性路径（资金安全 → 立即转人工）。
         返回原始 response 对象，解析交给 Agent 层。
         """
-        return self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            stream=stream
-        )
+        kwargs = {"model": self.model, "messages": messages,
+                  "tools": tools, "stream": stream}
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        return self.client.chat.completions.create(**kwargs)

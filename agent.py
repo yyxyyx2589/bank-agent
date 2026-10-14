@@ -10,6 +10,11 @@
 event_hook（第 3 周 SSE 流式用）：签名 event_hook(type:str, data:dict)。
 不传时行为退化为同步，现有测试不受影响。事件类型：
   tool_call / tool_result / answer_chunk / answer_done
+
+force_tool（收口期加的确定性约束）：非空则在**第一轮**用 tool_choice 强制调用该工具。
+对应 router 的资金安全路径（盗刷/非本人交易）——这类场景不允许模型先追问再转接，
+因为实测提示词约束只有约 50% 服从率。第二轮起恢复正常自由调用，
+所以"强制"只是把首轮的选择权收走，不影响 Agent 后续组织答案。
 """
 from __future__ import annotations
 
@@ -46,7 +51,16 @@ class Agent:
         if self.event_hook:
             self.event_hook(etype, data)
 
-    def run(self, user_message: str, history: list = None) -> AgentResult:
+    def run(self, user_message: str, history: list = None,
+            force_tool: str = None) -> AgentResult:
+        """跑一轮 ReAct 循环。
+
+        force_tool：只作用于**第一轮**——用 tool_choice 强制模型调用指定工具，
+        绕开"模型要不要调"的自由裁量。用于确定性路径（资金安全 → 立即转人工）：
+        实测仅靠提示词约束，同一句话两次运行约 50% 概率先追问卡号而不转接，
+        这类场景不能赌模型服从性，必须在协议层把工具调用钉死。
+        第二轮起恢复自由（模型拿着工具结果组织话术）。
+        """
         messages = [
             {"role": "system", "content": self.system_prompt},
         ]
@@ -56,9 +70,13 @@ class Agent:
         schemas = [to_openai_schema(t) for t in self.tools]
         tool_trace = []
 
-        for _turn in range(self.max_turns):
+        for turn in range(self.max_turns):
             # ② 发起请求：带上全部工具 schema
-            resp = self.llm.chat(messages, tools=schemas)
+            if turn == 0 and force_tool:
+                resp = self.llm.chat(messages, tools=schemas, tool_choice={
+                    "type": "function", "function": {"name": force_tool}})
+            else:
+                resp = self.llm.chat(messages, tools=schemas)
             msg = resp.choices[0].message
 
             # 出口：没有 tool_calls 说明模型给出了最终答案

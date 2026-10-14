@@ -16,6 +16,7 @@
 运行（需设 DEEPSEEK_API_KEY）：
   python eval.py --baseline agent --data data/eval_questions.jsonl
   python eval.py --baseline all   # 跑全部三基线，生成 reports/eval_report.json
+  python eval.py --baseline all --repeat 3   # 3 次重复，报告稳定性；默认预热排除冷启动
 """
 import argparse
 import json
@@ -207,6 +208,10 @@ def evaluate(baseline: str, data: list, components: dict, verbose: bool = True) 
 def aggregate(results: list) -> dict:
     """汇总指标。"""
     n = len(results) or 1
+    # 按路由分组的延迟：整体均值会被"大多数题走直答"掩盖，看不出代价花在哪。
+    by_route = {}
+    for r in results:
+        by_route.setdefault(r.get("route", "unknown"), []).append(r["latency_ms"])
     return {
         "count": len(results),
         "answer_score_avg": round(sum(r["answer_score"] for r in results) / n, 3),
@@ -215,6 +220,8 @@ def aggregate(results: list) -> dict:
         "route_accuracy_avg": round(sum(r["route_accuracy"] for r in results) / n, 3),
         "turns_avg": round(sum(r["turns"] for r in results) / n, 2),
         "latency_ms_avg": round(sum(r["latency_ms"] for r in results) / n),
+        "latency_by_route": {k: round(sum(v) / len(v))
+                             for k, v in sorted(by_route.items())},
     }
 
 
@@ -229,6 +236,11 @@ def mean_aggregate(runs: list) -> dict:
         vals = [r[k] for r in runs]
         if k == "count":
             out[k] = vals[0]
+        elif isinstance(vals[0], dict):
+            # 非标量指标（如按路由分组的延迟）：逐键取均值
+            out[k] = {kk: round(sum(v[kk] for v in vals if kk in v)
+                                / len([v for v in vals if kk in v]))
+                      for kk in vals[0]}
         elif k == "latency_ms_avg":
             out[k] = round(sum(vals) / len(vals))
         elif k == "turns_avg":
@@ -265,6 +277,8 @@ def main():
     parser.add_argument("--data", default=str(DATA_FILE))
     parser.add_argument("--repeat", type=int, default=1,
                         help="重复 N 次并报告稳定性（均值/极差）；N>1 时明细只打第一次")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="关闭预热（默认会先跑一次不计入统计的空调用）")
     args = parser.parse_args()
 
     data = load_eval_data(Path(args.data))
@@ -289,6 +303,19 @@ def main():
     }
 
     baselines = ["agent", "rag"] if args.baseline == "all" else [args.baseline]
+
+    # 预热：两样东西都要热，否则它们的开销会全部记到第 1 题头上（实测第 1 题 36 秒）——
+    #   ① LLM 连接（TLS 握手 / 服务端冷启动）
+    #   ② RAG 的 embedding 模型懒加载（实测首次 30114ms，第二次 36ms，差 800 倍）
+    # 这不是"美化数字"：把一次性初始化成本算进单题处理耗时，本身就是测量口径错误。
+    if not args.no_warmup:
+        try:
+            llm.chat([{"role": "user", "content": "ping"}])
+            components["rag_tool"].call({"query": "银行卡挂失流程", "top_k": 1})
+            print("已预热（LLM 连接 + embedding 模型），首次冷启动开销不计入延迟统计\n")
+        except Exception as e:  # 预热失败不该让整个评估挂掉
+            print(f"预热失败（忽略，继续评估）: {e}\n")
+
     if "rag_lora" in baselines:
         print("⚠️  rag_lora 为设计预留基线（未接入真实 LoRA，复用纯 RAG 链路），数据与 rag 相同。\n"
               "    若接入本地 Qwen2.5-1.5B+LoRA，替换 lora_llm 才是有效数据。")

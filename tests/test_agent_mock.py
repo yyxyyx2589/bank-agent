@@ -46,8 +46,9 @@ class ScriptedLLM:
         self.script = list(script)
         self.calls = []
 
-    def chat(self, messages, tools=None, stream=False):
-        self.calls.append({"messages": messages, "tools": tools})
+    def chat(self, messages, tools=None, stream=False, tool_choice=None):
+        self.calls.append({"messages": messages, "tools": tools,
+                           "tool_choice": tool_choice})
         if self.script:
             return self.script.pop(0)
         return make_response(content="（兜底总结回答）")
@@ -142,10 +143,46 @@ def test_max_turns_fallback():
     assert check("v5 总结请求不带 tools", llm.calls[8]["tools"] is None)
 
 
+def test_force_tool_first_turn_only():
+    """v6 force_tool：首轮用 tool_choice 钉死工具调用，次轮恢复自由。
+
+    设计动机：资金安全类请求不允许模型犹豫（实测提示词约束约 50% 服从率），
+    必须在协议层强制首轮就转接。这里验证"只管首轮"，不破坏后续答案组织。
+    """
+    llm = ScriptedLLM([
+        make_response(tool_calls=[make_tool_call(
+            "call_1", "escalate_to_human",
+            '{"reason": "客户报告账户疑似被盗刷", "priority": "high"}')]),
+        make_response(content="已为您紧急转接反欺诈专员，请保持通话。"),
+    ])
+    result = build_agent(llm).run("我的卡被盗刷了", force_tool="escalate_to_human")
+
+    assert check("v6 首轮带 tool_choice 且指向目标工具",
+                 llm.calls[0]["tool_choice"] == {
+                     "type": "function",
+                     "function": {"name": "escalate_to_human"}})
+    assert check("v6 次轮不再强制（tool_choice 为 None）",
+                 llm.calls[1]["tool_choice"] is None)
+    assert check("v6 工具确实被执行并进轨迹",
+                 len(result.tool_trace) == 1
+                 and result.tool_trace[0]["name"] == "escalate_to_human")
+    assert check("v6 工具结果含转接单信息",
+                 "transfer_no" in result.tool_trace[0]["result"])
+    assert check("v6 最终有安抚话术", "反欺诈" in result.answer)
+
+
+def test_force_tool_absent_by_default():
+    """v7 不给 force_tool 时，第一轮不带 tool_choice（不要误伤默认路径）。"""
+    llm = ScriptedLLM([make_response(content="好的。")])
+    build_agent(llm).run("你好")
+    assert check("v7 默认不带 tool_choice", llm.calls[0]["tool_choice"] is None)
+
+
 if __name__ == "__main__":
     for fn in [test_single_tool_roundtrip, test_unknown_tool_defense,
                test_bad_json_defense, test_no_tool_chitchat,
-               test_max_turns_fallback]:
+               test_max_turns_fallback, test_force_tool_first_turn_only,
+               test_force_tool_absent_by_default]:
         print(f"\n--- {fn.__name__} ---")
         fn()
-    print("\n全部通过：主循环五个场景（v1-v5）逻辑正确。")
+    print("\n全部通过：主循环七个场景（v1-v7）逻辑正确。")

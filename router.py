@@ -85,6 +85,60 @@ _OUT_OF_SCOPE_RE = re.compile(
     r"(推荐|荐股|选股|买|买入|炒股|预测|看好|能涨|会涨|值得买).{0,5}(股票|个股)"
     r"|荐股|牛股|黑马股|股票推荐|彩票|赌博|赌球|六合彩|足彩|买彩票")
 
+# 升级人工信号词（硬约束：路由层强制 Agent 首轮调用 escalate_to_human，见 _needs_escalation）
+# 为什么单列一类：投诉 / 明确要求人工，属于「不该由 AI 自己处理」的情形。
+# 它们与知识库的语义距离天然远（制度文档里没有「我要投诉」这种话），
+# 实测 sim 落在 0.13~0.33，会进入低置信区，于是被兜底成 refuse_human。
+# 但 refuse_human 的话术是「超出知识库覆盖范围」——对愤怒的客户说这句就是客服事故。
+#
+# 措辞上刻意收紧：「太差」这种泛评价不入表（"我的征信太差能不能办卡"是业务咨询，
+# 不是投诉），只收带服务主体的表达（服务态度、态度差、服务差、太差了）。
+_ESCALATE_WORDS = {"投诉", "举报", "找人工", "转人工", "人工服务", "人工客服",
+                   "转接人工", "找领导", "找经理", "找主管", "找上级", "升级处理",
+                   "强烈不满", "严重不满", "服务态度", "态度差", "服务差",
+                   "太差了", "索赔", "要求赔偿"}
+
+# 资金安全信号词（见 _is_fund_safety）
+# 与 _ESCALATE_WORDS 的分工：两档都强制转接，差别在指令内容与紧迫度——
+#   投诉/要求人工类 → 常规升级：安抚情绪 + 说明流程，priority「优先」
+#   资金安全类     → 紧急升级：禁止先追问身份、priority「紧急」、转反欺诈组
+_FUND_SAFETY_WORDS = {"盗刷", "账户被盗", "卡被盗", "不是我取", "不是我刷",
+                      "不是本人操作", "不是本人消费", "未授权交易", "不明消费",
+                      "莫名扣款", "异常扣款", "钱被转走", "资金被划走",
+                      "被转走了", "资金安全"}
+
+# 查询语境排除词（见 _needs_escalation）
+# 为什么需要这一层：把升级判定提到阈值之前后，发现「投诉」这个词有两种语境——
+#   「我要投诉你们」          = 客户在表达不满 → 必须升级
+#   「客户 C.. 有没有投诉记录」 = 坐席在查档案   → 只是普通业务查询
+# 前者若漏判，客户被"超出知识库范围"打发；后者若误判，
+# Agent 会给一个毫无不满表达的客户凭空开一张转接单。两个方向都要防。
+# 判据：出现"记录/工单/历史/之前"等检索语境词，且没有第一人称主体（我/本人/我们）。
+# 带第一人称时仍算升级（"我要查一下我的投诉记录"本身就是客户诉求）。
+_RECORD_QUERY_WORDS = {"记录", "工单", "历史", "之前", "查一下", "查询", "档案"}
+_SELF_WORDS = {"我", "本人", "咱们", "我们"}
+
+# 升级路径注入给 Agent 的合规提示（见 _needs_escalation）
+# 两档指令的差别就在"时效性"上：资金安全要抢时间（禁止先追问身份），
+# 投诉类要走安抚流程。工具调用本身两档都强制（见 route() 的 force_tool）。
+_ESCALATE_NOTE = (
+    "\n\n[合规提示·必须执行] 该请求已由路由层判定为「需升级人工」"
+    "（客户表达强烈不满或明确要求人工）。\n"
+    "请**立即**调用 escalate_to_human 生成转接单，填入 reason、priority 与建议处理团队"
+    "（投诉类建议转「客户投诉处理组」，priority 填「优先」）。\n"
+    "已完成转接后，先安抚客户情绪，再说明后续流程（谁会在多久内联系、需要准备什么）。"
+    "不要只回答业务知识问题，也不要用「超出知识库范围」这类话术打发客户。")
+
+_FUND_SAFETY_NOTE = (
+    "\n\n[合规提示·必须执行·资金安全] 该请求涉及客户资金安全"
+    "（疑似盗刷 / 非本人交易），属于最高优先级，路由层已强制本轮转接。\n"
+    "请**立即**调用 escalate_to_human 生成转接单：reason 写明「疑似盗刷/非本人交易」等要素，"
+    "priority 填「紧急」，suggested_team 填「反欺诈组」。\n"
+    "**不要先向客户追问账户号或身份信息**——核验身份是人工坐席接手后的动作，"
+    "在 AI 环节追问反而延误冻结/挂失的处置时机。\n"
+    "调用完成后，再给出安抚话术与客户当下可自助采取的动作（如先致电挂失）。"
+    "不要用「超出知识库范围」这类话术回应客户。")
+
 
 @dataclass
 class RouteResult:
@@ -208,6 +262,57 @@ class Router:
         """
         return bool(_OUT_OF_SCOPE_RE.search(query))
 
+    def _needs_escalation(self, query: str) -> bool:
+        """升级人工识别：投诉 / 明确要求人工 / 涉及资金安全。
+
+        为什么不能让它落到 refuse_human（这是收口审查时发现的设计缺陷）：
+        refuse_human 的话术是「这个问题超出了当前知识库的覆盖范围（相似度 x.xx）」。
+        对一个投诉的客户说「你的投诉超出了我们的知识库范围」是客服事故——
+        客户要的不是"你答不了"，而是"有人来处理"。
+
+        更重要的是：`escalate_to_human` 这个工具因此成了**死代码**——
+        投诉类问题在路由层就被拦掉了，Agent 永远看不到它们，
+        自然永远不会去调用它。而"该不该自己处理"恰恰是 Agent 应当主动判断的事。
+        所以这里把升级类问题交给 Agent，由它调用 escalate_to_human 生成转接单
+        （带 reason / priority / 建议处理团队），这才是"从 RAG 到 Agent"的完整体现。
+
+        为什么最终没有走"给提示词、让 Agent 自己决定调不调"的软路线：
+        实测同一句"我的卡被盗刷了"两次运行，一次转接、一次先追问卡号——
+        约 50% 服从率。既然路由层已经判定「这件事不该由 AI 处理」，
+        再让模型把"要不要转"自由裁量一次，只会把确定性换成方差。
+        所以两档都强制首轮调用（tool_choice），差别只留在指令内容上（见两个 NOTE）。
+
+        一个必须防的误判（上提到阈值之前后才暴露出来）：
+        「投诉」有两种语境——客户在表达不满，还是坐席在查档案。
+        靠 _RECORD_QUERY_WORDS + _SELF_WORDS 区分，见常量处的说明。
+        """
+        if self._is_fund_safety(query):
+            return True
+        q = query.lower()
+        if not any(w in q for w in _ESCALATE_WORDS):
+            return False
+        is_record_query = any(w in q for w in _RECORD_QUERY_WORDS)
+        has_self = any(w in q for w in _SELF_WORDS)
+        return not (is_record_query and not has_self)
+
+    def _is_fund_safety(self, query: str) -> bool:
+        """资金安全类识别：盗刷 / 非本人交易 / 账户异常——最高紧迫度的一档。
+
+        为什么要在升级类里再切出这一档（而不是和投诉共用一套指令）：
+        投诉和资金安全同为「该转人工」，但**时效性要求完全不同**。
+        投诉晚一分钟转接，客户只是多等一会；盗刷晚一分钟处置，
+        钱可能已经被转走。所以这一档的指令必须额外包含两条：
+          · priority 直接指定「紧急」、团队指定「反欺诈组」；
+          · **禁止 AI 先追问账户/身份信息**——核验身份是人工坐席接手后的动作，
+            AI 环节追问等于把客户按在流程里空等，延误冻结/挂失的黄金时间。
+
+        误报的收益是不对称的，这决定了它该用"宁枉勿纵"的判定口径：
+          误升 → 客户多接一次人工坐席，成本极低；
+          漏升 → 一次真实的盗刷投诉被当成普通咨询走完流程，代价极大。
+        """
+        q = query.lower()
+        return any(w in q for w in _FUND_SAFETY_WORDS)
+
     def route(self, user_message: str, history: list = None) -> RouteResult:
         # ① 先做一次 RAG 检索，拿置信度信号
         rag_raw = self.rag_tool.call({"query": user_message, "top_k": 3})
@@ -225,6 +330,20 @@ class Router:
                                  "sim": sim, "kw_coverage": kw_cov,
                                  "reason": "out_of_scope"})
             return self._route_refuse_human(user_message, sim, kw_cov, kb_hits)
+
+        # ①.6 升级人工：投诉 / 要求人工 / 资金安全。
+        #     放在阈值决策**之前**：这类请求的处置方式与相似度无关——
+        #     客户投诉，不管知识库里有没有相关条款，都不该由 AI 直接答完了事。
+        #     两档都用 tool_choice 强制 Agent 首轮转接；差别在指令内容与紧迫度
+        #     （资金安全：紧急/反欺诈组/禁止先追问身份，见 _FUND_SAFETY_NOTE）。
+        if self._needs_escalation(user_message):
+            fund = self._is_fund_safety(user_message)
+            self._emit("route", {"route": "agent_loop",
+                                 "sim": sim, "kw_coverage": kw_cov,
+                                 "reason": "fund_safety" if fund else "escalation"})
+            return self._route_agent_loop(user_message, sim, kw_cov, kb_hits, history,
+                                         note=_FUND_SAFETY_NOTE if fund else _ESCALATE_NOTE,
+                                         force_tool="escalate_to_human")
 
         # ② 阈值决策
         high_conf = sim >= self.sim_high and kw_cov >= self.kw_coverage_low
@@ -296,20 +415,25 @@ class Router:
         return RouteResult(route="rag_direct", answer=answer,
                           sim=sim, kw_coverage=kw_cov, kb_hits=kb_hits[:1])
 
-    def _route_agent_loop(self, query, sim, kw_cov, kb_hits, history=None) -> RouteResult:
+    def _route_agent_loop(self, query, sim, kw_cov, kb_hits, history=None,
+                          note: str = "", force_tool: str = "") -> RouteResult:
         """中置信：把 RAG 命中片段作为先验 observation 注入 Agent 初始上下文。
 
         门控：只有 sim >= sim_low 才注入先验。sim 低于阈值的命中实际不相关，
         注入只会误导 LLM（如"我卡丢了怎么办"sim=0.0，却注入了信用卡分期的 KB，
         导致 LLM 开头复述分期规则，而不是直接调工具查工单）。
         sim < sim_low 时（意图检测救回的查询）纯走 Agent 调工具，不注入先验。
+
+        note：      路由层给 Agent 的额外指令（如升级人工路径的合规提示）。
+        force_tool：强制 Agent 首轮调用的工具名（资金安全→立即转接，见 _is_fund_safety）。
         """
         prior = ""
         if kb_hits and sim >= self.sim_low:
             prior = f"\n\n[知识库先验，相似度 {sim:.2f}] {kb_hits[0]['text']}"
-        enriched_query = query + prior
+        enriched_query = query + prior + note
 
-        result = self.agent.run(enriched_query, history=history)
+        result = self.agent.run(enriched_query, history=history,
+                                force_tool=force_tool or None)
         return RouteResult(route="agent_loop", answer=result.answer,
                           sim=sim, kw_coverage=kw_cov,
                           tool_trace=result.tool_trace,
