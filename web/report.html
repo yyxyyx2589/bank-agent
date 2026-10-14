@@ -112,7 +112,7 @@ function renderChart(data){
   const legend = active.map(bl =>
     `<span><i class="dot" style="background:${BASE_META[bl].color}"></i>${BASE_META[bl].name}</span>`).join("");
   return `<div class="card">
-    <h2>三基线对比（准确率类指标，越高越好）</h2>
+    <h2>基线对比（准确率类指标，越高越好；RAG+LoRA 为设计预留，未跑则不显示）</h2>
     <div class="chart">${groups}</div>
     <div class="legend">${legend}</div>
   </div>`;
