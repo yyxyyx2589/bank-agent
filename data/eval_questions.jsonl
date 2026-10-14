@@ -1,0 +1,20 @@
+{"qid":"B01","question":"银行卡丢了怎么补办","expected_points":["身份证","网点"],"expected_tools":[],"expected_route":"rag_direct"}
+{"qid":"B02","question":"信用卡分期手续费怎么算","expected_points":["手续费率","期数"],"expected_tools":[],"expected_route":"rag_direct"}
+{"qid":"B03","question":"大额存单起存多少钱","expected_points":["20万"],"expected_tools":[],"expected_route":"agent_loop"}
+{"qid":"B04","question":"房贷提前还款有违约金吗","expected_points":["违约金","预约"],"expected_tools":[],"expected_route":"rag_direct"}
+{"qid":"B05","question":"未成年人能自己开卡吗","expected_points":["监护人","16周岁"],"expected_tools":[],"expected_route":"rag_direct"}
+{"qid":"B06","question":"定期存款提前取出来利息怎么算","expected_points":["活期","利息"],"expected_tools":[],"expected_route":"rag_direct"}
+{"qid":"B07","question":"理财产品 R3 是什么意思","expected_points":["本金损失","中风险"],"expected_tools":[],"expected_route":"rag_direct"}
+{"qid":"B08","question":"征信报告有错误怎么改","expected_points":["异议","20日"],"expected_tools":[],"expected_route":"rag_direct"}
+{"qid":"B09","question":"客户 C2026031800237 之前来问过什么","expected_points":["挂失","冻结"],"expected_tools":[{"name":"query_ticket","params":{"customer_id":"C2026031800237"}}],"expected_route":"agent_loop"}
+{"qid":"B10","question":"三年期大额存单的年利率是多少","expected_points":["2.35"],"expected_tools":[{"name":"get_product_rate","params":{"keyword":"大额存单"}}],"expected_route":"agent_loop"}
+{"qid":"B11","question":"客户要转 60 万，需要提前预约吗","expected_points":["预约"],"expected_tools":[{"name":"check_business_rule","params":{"scenario":"大额转账"}}],"expected_route":"agent_loop"}
+{"qid":"B12","question":"查一下 C2026031800237 的工单处理状态","expected_points":["已解决"],"expected_tools":[{"name":"query_ticket","params":{"customer_id":"C2026031800237"}}],"expected_route":"agent_loop"}
+{"qid":"B13","question":"信用卡分 12 期的手续费率是多少","expected_points":["7.2"],"expected_tools":[{"name":"get_product_rate","params":{"keyword":"分期"}}],"expected_route":"agent_loop"}
+{"qid":"B14","question":"银行卡挂失可以让人代办吗","expected_points":["本人"],"expected_tools":[{"name":"check_business_rule","params":{"scenario":"挂失"}}],"expected_route":"agent_loop"}
+{"qid":"B15","question":"企业开基本户要带什么材料","expected_points":["营业执照"],"expected_tools":[{"name":"check_business_rule","params":{"scenario":"开户"}}],"expected_route":"agent_loop"}
+{"qid":"B16","question":"客户 C2026031800237 有没有投诉记录","expected_points":["投诉"],"expected_tools":[{"name":"query_ticket","params":{"customer_id":"C2026031800237"}}],"expected_route":"agent_loop"}
+{"qid":"B17","question":"你好","expected_points":[],"expected_tools":[],"expected_route":"agent_loop"}
+{"qid":"B18","question":"帮我推荐一只股票","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}
+{"qid":"B19","question":"你们网点附近哪里有好吃的火锅","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}
+{"qid":"B20","question":"我觉得你们利率太低了，我要投诉","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}
