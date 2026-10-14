@@ -4,7 +4,7 @@
     python verify.py
 
 流程：
-  1. 四个测试套件（零 API 消耗）
+  1. 五个测试套件（零 API 消耗）
   2. API key 检查（.env 或环境变量，没有则停在步骤 1）
   3. 真实对话验证（约 6 次 LLM 调用，几分钱内）：临时起一个本地服务，
      走**真实 HTTP + SSE**（而非直接调 Router），覆盖 FastAPI 路由、SSE 事件序列、
@@ -30,7 +30,8 @@ def step(label):
 def run_tests():
     step("步骤 1/3：测试套件（零 API 消耗）")
     suites = ["tests/test_agent_mock.py", "tests/test_router_mock.py",
-              "tests/test_eval_logic.py", "tests/test_agent_langgraph_parity.py"]
+              "tests/test_eval_logic.py", "tests/test_agent_langgraph_parity.py",
+              "tests/test_sft_leakage.py"]
     ok = True
     for s in suites:
         r = subprocess.run([PY, str(ROOT / s)], capture_output=True,

@@ -2,7 +2,7 @@
 
 三基线：
   baseline_rag        纯 RAG（只用 search_knowledge 直答，不进 Agent 循环）
-  baseline_rag_lora   RAG + LoRA（设计预留基线，基座为本地 Qwen2.5-1.5B+LoRA，当前未接入）
+  baseline_rag_lora   RAG + LoRA（本地 Qwen2.5-1.5B + 银行域 LoRA，私有化小模型方案）
   baseline_agent      Agent（本项目：Router + Agent 循环 + 工具）
 
 六项指标：
@@ -84,10 +84,17 @@ def run_baseline_rag(question: str, rag_tool, llm) -> dict:
 
 
 def run_baseline_rag_lora(question: str, rag_tool, lora_llm) -> dict:
-    """RAG+LoRA 基线（设计预留，未接入真实 LoRA）：
-    若接入本地 Qwen2.5-1.5B+LoRA，lora_llm 用 transformers 加载，接口与 LLMClient 一致。
+    """RAG + LoRA 基线：检索链路与纯 RAG 完全一致，只把作答模型换成
+    本地 Qwen2.5-1.5B + 银行域 LoRA（training/out/bank_lora）。
+
+    为什么它必须和纯 RAG 用同一条链路：这样两条基线之间**唯一的变量**
+    就是「谁在作答」——云端大模型 vs 私有化小模型。指标差异才能归因到模型，
+    而不是被链路上的其他改动混淆。
+
+    为什么这个基线值得存在：银行普遍要求私有化部署（客户数据不出内网），
+    「小模型 + 域微调」是真实存在的成本方案。它和 Agent 基线的差距，
+    恰好能量化「编排层到底值多少」——这一段不是凑数，是成本-效果曲线的中间点。
     """
-    # 占位：复用纯 RAG 逻辑，第 4 周接真实 LoRA 后替换 lora_llm
     return run_baseline_rag(question, rag_tool, lora_llm)
 
 
@@ -299,10 +306,23 @@ def main():
     router = Router(rag_tool=TOOL_REGISTRY["search_knowledge"], agent=agent)
     components = {
         "llm": llm, "rag_tool": TOOL_REGISTRY["search_knowledge"],
-        "router": router, "lora_llm": llm,  # 预留基线，未接入真实 LoRA（复用纯 RAG 链路）
+        "router": router, "lora_llm": None,  # 需要 rag_lora 基线时才加载本地模型
     }
 
-    baselines = ["agent", "rag"] if args.baseline == "all" else [args.baseline]
+    baselines = (["agent", "rag", "rag_lora"] if args.baseline == "all"
+                 else [args.baseline])
+
+    # 中间基线要的是**真的本地模型**：Qwen2.5-1.5B + 银行域 LoRA（training/out/bank_lora）。
+    # 按需加载 —— 不跑 rag_lora 就不吃这 1.5B 的加载时间。
+    if "rag_lora" in baselines:
+        from training.lora_llm import (LocalLoRAClient, adapter_available,
+                                       DEFAULT_ADAPTER)
+        if not adapter_available(Path(DEFAULT_ADAPTER)):
+            print(f"[x] 缺少银行域 adapter: {DEFAULT_ADAPTER}")
+            print("    先跑：python training/build_sft.py && python training/train_lora.py")
+            return
+        print("[*] 加载中间基线模型（本地 Qwen2.5-1.5B + bank_lora）…")
+        components["lora_llm"] = LocalLoRAClient()
 
     # 预热：两样东西都要热，否则它们的开销会全部记到第 1 题头上（实测第 1 题 36 秒）——
     #   ① LLM 连接（TLS 握手 / 服务端冷启动）
@@ -312,13 +332,17 @@ def main():
         try:
             llm.chat([{"role": "user", "content": "ping"}])
             components["rag_tool"].call({"query": "银行卡挂失流程", "top_k": 1})
-            print("已预热（LLM 连接 + embedding 模型），首次冷启动开销不计入延迟统计\n")
+            if components.get("lora_llm"):
+                # 本地模型第一次 generate 还要付 CUDA kernel 预热，一并热掉
+                components["lora_llm"].chat([{"role": "user", "content": "你好"}])
+            print("已预热（LLM 连接 + embedding 模型 + 本地模型），"
+                  "首次冷启动开销不计入延迟统计\n")
         except Exception as e:  # 预热失败不该让整个评估挂掉
             print(f"预热失败（忽略，继续评估）: {e}\n")
 
     if "rag_lora" in baselines:
-        print("⚠️  rag_lora 为设计预留基线（未接入真实 LoRA，复用纯 RAG 链路），数据与 rag 相同。\n"
-              "    若接入本地 Qwen2.5-1.5B+LoRA，替换 lora_llm 才是有效数据。")
+        print("中间基线 = 本地 Qwen2.5-1.5B + 银行域 LoRA，检索链路与纯 RAG 完全相同，"
+              "只把作答模型换成私有化小模型（贪心解码，结果可复现）。")
     REPORTS_DIR.mkdir(exist_ok=True)
     all_results = {}
 

@@ -13,7 +13,7 @@
 {"qid":"B13","question":"信用卡分 12 期的手续费率是多少","expected_points":["7.2"],"expected_tools":[{"name":"get_product_rate","params":{"keyword":"分期"}}],"expected_route":"agent_loop"}
 {"qid":"B14","question":"银行卡挂失可以让人代办吗","expected_points":["本人"],"expected_tools":[{"name":"check_business_rule","params":{"scenario":"挂失"}}],"expected_route":"agent_loop"}
 {"qid":"B15","question":"企业开基本户要带什么材料","expected_points":["营业执照"],"expected_tools":[{"name":"check_business_rule","params":{"scenario":"开户"}}],"expected_route":"agent_loop"}
-{"qid":"B16","question":"客户 C2026031800237 有没有投诉记录","expected_points":["投诉"],"expected_tools":[{"name":"query_ticket","params":{"customer_id":"C2026031800237"}}],"expected_route":"agent_loop"}
+{"qid":"B16","question":"客户 C2026031800237 有没有投诉记录","expected_points":["没有投诉记录"],"expected_tools":[{"name":"query_ticket","params":{"customer_id":"C2026031800237"}}],"expected_route":"agent_loop"}
 {"qid":"B17","question":"你好","expected_points":[],"expected_tools":[],"expected_route":"agent_loop"}
 {"qid":"B18","question":"帮我推荐一只股票","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}
 {"qid":"B19","question":"你们网点附近哪里有好吃的火锅","expected_points":[],"expected_tools":[],"expected_route":"refuse_human"}

@@ -116,7 +116,7 @@ function renderChart(data){
   const legend = active.map(bl =>
     `<span><i class="dot" style="background:${BASE_META[bl].color}"></i>${BASE_META[bl].name}</span>`).join("");
   return `<div class="card">
-    <h2>基线对比（准确率类指标，越高越好；RAG+LoRA 为设计预留，未跑则不显示）</h2>
+    <h2>基线对比（准确率类指标，越高越好）</h2>
     <div class="chart">${groups}</div>
     <div class="legend">${legend}</div>
   </div>`;
@@ -147,19 +147,25 @@ function renderTable(data){
 
 function renderNote(data){
   let stabLine = "";
-  const stA = data && data.agent && data.agent.stability;   // Agent 的稳定性
-  const stR = data && data.rag && data.rag.stability;       // 纯 RAG 的稳定性
+  const stA = data && data.agent && data.agent.stability;      // Agent 的稳定性
+  const stR = data && data.rag && data.rag.stability;          // 纯 RAG 的稳定性
+  const stL = data && data.rag_lora && data.rag_lora.stability; // 本地小模型的稳定性
   if (stA && stA.runs > 1) {
-    // 注意：两个基线各自的波动要各取各的 stability 块，不能共用一份
-    const range = (st, m) => (st && st[m])
-      ? `${(st[m].min*100).toFixed(1)}% ~ ${(st[m].max*100).toFixed(1)}%` : "—";
+    // 注意：各基线各自的波动要各取各的 stability 块，不能共用一份
+    // 极差为 0 时写成「恒为 X%」——否则会显示成 "66.7% ~ 66.7%"，看着像 bug
+    const range = (st, m) => {
+      if(!st || !st[m]) return "—";
+      const lo = (st[m].min*100).toFixed(1), hi = (st[m].max*100).toFixed(1);
+      return lo === hi ? `恒为 ${lo}%（极差 0）` : `${lo}% ~ ${hi}%`;
+    };
     const stableAll = ["answer_score_avg","route_accuracy_avg","tool_accuracy_avg","param_accuracy_avg"]
       .every(m => stA[m] && stA[m].min === stA[m].max);
     stabLine = `<p><b>稳定性</b>：本报告为 <b>${stA.runs} 次重复运行的均值</b>
       （<code>python eval.py --baseline all --repeat ${stA.runs}</code>），而非单跑一次的结果。
       Agent 的端到端解决率、路由准确率、工具选择与参数准确率在 ${stA.runs} 次运行中
       ${stableAll ? "<b>完全一致（极差 0）</b>，即上表 100% 不是运气" :
-      "波动极小"}；纯 RAG 的解决率则在 ${range(stR, "answer_score_avg")} 之间波动 ——
+      "波动极小"}；纯 RAG 的解决率在 ${range(stR, "answer_score_avg")} 之间波动${
+      stL ? `，本地小模型（贪心解码）${range(stL, "answer_score_avg")}` : ""} ——
       稳定性上的差别，本身就是「有据可依」和「靠模型即兴发挥」的差别。</p>`;
   }
   return `<div class="card note">
@@ -167,18 +173,32 @@ function renderNote(data){
     <p><b>测试集</b>：银行坐席业务问题，覆盖三类——知识类（产品利率、制度条款，
     期望知识库直答）、多源类（需组合工单 + 业务规则 + 费率才能回答，期望 Agent 调工具）、
     超纲类（知识库外的投资建议、闲聊、非本行业务，期望转人工）。</p>
-    <p><b>三基线</b>：纯 RAG（只检索+直答）/ RAG+LoRA（本地 Qwen2.5-1.5B 微调基座）/
-    Agent（本项目：决策路由 + 工具循环）。</p>
+    <p><b>三基线</b>：纯 RAG（只检索+直答，云端大模型）/
+    RAG+LoRA（本地 Qwen2.5-1.5B + 银行域 LoRA，私有化部署方案）/
+    Agent（本项目：决策路由 + 工具循环）。中间那条基线的检索链路与纯 RAG
+    <b>完全一致，唯一变量就是「谁在作答」</b>——这样差异才能归因到模型，
+    而不是被链路上的其他改动混淆。</p>
     <p><b>指标定义</b>：端到端解决率 = 答案命中标注要点的比例（空白归一化后匹配）；
     <b>路由准确率</b> = 实际走的分支（直答 / 工具循环 / 转人工）与标注期望一致的比例，
-    纯 RAG 无路由概念、一律计为直答；工具选择准确率 = 期望工具集被实际调用的比例；
+    纯 RAG 与 RAG+LoRA 无路由概念、一律计为直答；工具选择准确率 = 期望工具集被实际调用的比例；
     参数准确率 = 工具参数与标注匹配的比例（字符串双向包含，因参数由模型从自然语言抽取）；
     平均轮次 = Agent 达到答案的工具调用次数；延迟 = 单题处理耗时。</p>
-    <p><b>预期结论</b>：知识类三基线接近；多源类 Agent 显著优于纯 RAG（能查工单、
-    费率与业务规则）；超纲类只有 Agent 有转人工兜底（纯 RAG 会硬答产生幻觉）。
+    <p><b>结论</b>：知识类（知识库能覆盖、且不涉及精确数字）三条基线都能答；
+    多源类只有 Agent 能答——工单状态、精确费率、条件判定这些答案不在知识库里，
+    检索再准也拿不到，必须调工具查表；
+    超纲类只有 Agent 有转人工兜底（另外两条会硬答）。
     对银行场景来说最后这条不是性能差异，而是<b>合规差异</b>——宁可转人工，
     也不能让模型对着没有依据的问题编一个听起来合理的答案。路由准确率正是把
     这条合规差异量化成一个数字。</p>
+    <p><b>训练数据的泄漏防护</b>：中间基线的 LoRA 是用本项目的知识库语料自建的
+    （<code>training/build_sft.py</code>），因此必须防止它「背答案」。
+    构建脚本设了两道闸门：与评测题完全相同的问题剔除、与评测题字符相似度 ≥0.72
+    的问题也剔除（第一版只做精确匹配时剔除了 0 条，但实际存在 8 条近重复——
+    例如训练问「银行卡丢了要怎么补办呢」对标评测题「银行卡丢了怎么补办」）。
+    另外<b>刻意没有</b>把产品表/业务规则表里的精确数字训进去——那正是 Agent
+    才能拿到的信息，训进去会让中间基线靠记忆虚高，污染对比。
+    诚实边界：评测期望要点本身是知识库里的<b>事实</b>，事实层面的重合无法也不应
+    避免（避免它就等于要求模型不许知道业务知识）。</p>
     ${stabLine}
   </div>`;
 }

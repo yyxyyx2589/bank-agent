@@ -20,6 +20,15 @@ docs/简历项目描述.md
 db/*.db
 data/chroma/
 
+# LoRA 训练产物（可重新生成：build_sft.py → train_lora.py，约 6 分钟）
+# 不把 adapter 权重和 tokenized 训练数据放进仓库：
+#   · adapter ~37MB，是二进制权重，放 git 里既撑体积又没有 diff 价值
+#   · bank_sft.jsonl 是 input_ids 的展开形式，几 MB 且完全可由脚本复现
+# 保留 bank_sft_raw.jsonl（人类可读的 messages）—— 它是训练数据的**可审计版本**，
+# 面试时能直接翻给人看「我到底喂了什么给模型」，这个比权重更有说服力。
+training/out/
+data/bank_sft.jsonl
+
 # IDE
 .vscode/
 .idea/
