@@ -47,16 +47,20 @@ def adapter_available(adapter_dir: Path) -> bool:
 
 
 class LocalLoRAClient:
-    """本地推理客户端，接口与 LLMClient 对齐。"""
+    """本地推理客户端，接口与 LLMClient 对齐。
+
+    adapter_dir=None 时**只加载基座、不挂 adapter** —— 这是消融实验要用的：
+    同一条检索链路，唯一的差别就是「有没有微调过」。没有这一档，
+    「我训了 LoRA」就只是一句做了什么事，而不是「LoRA 带来了多少提升」。
+    """
 
     def __init__(self, adapter_dir=DEFAULT_ADAPTER, model_path=DEFAULT_MODEL,
                  max_new_tokens: int = 200, device: str = "cuda"):
         import torch
-        from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.torch = torch
-        self.adapter_dir = str(adapter_dir)
+        self.adapter_dir = str(adapter_dir) if adapter_dir else None
         self.max_new_tokens = max_new_tokens
 
         if not torch.cuda.is_available() and device == "cuda":
@@ -72,8 +76,15 @@ class LocalLoRAClient:
         dtype = torch.float16 if device == "cuda" else torch.float32
         base = AutoModelForCausalLM.from_pretrained(
             model_path, dtype=dtype, trust_remote_code=True)
-        print(f"[*] 挂载银行域 adapter {self.adapter_dir}")
-        self.model = PeftModel.from_pretrained(base, self.adapter_dir)
+        if self.adapter_dir:
+            from peft import PeftModel
+            print(f"[*] 挂载银行域 adapter {self.adapter_dir}")
+            self.model = PeftModel.from_pretrained(base, self.adapter_dir)
+            self.tag = "qwen2.5-1.5b+bank_lora"
+        else:
+            print("[*] 消融档：不挂 adapter（纯基座）")
+            self.model = base
+            self.tag = "qwen2.5-1.5b(基座)"
         self.model.eval()
         if device == "cuda":
             self.model = self.model.cuda()
@@ -103,7 +114,7 @@ class LocalLoRAClient:
 
         msg = SimpleNamespace(content=content, tool_calls=None, role="assistant")
         return SimpleNamespace(choices=[SimpleNamespace(message=msg)],
-                               usage=None, model=f"qwen2.5-1.5b+bank_lora")
+                               usage=None, model=self.tag)
 
 
 def main():
@@ -112,18 +123,20 @@ def main():
     import time
     ap = argparse.ArgumentParser()
     ap.add_argument("--adapter", default=str(DEFAULT_ADAPTER))
+    ap.add_argument("--no-adapter", action="store_true",
+                    help="只加载基座、不挂 adapter（消融实验：验证 LoRA 到底带来了什么）")
     ap.add_argument("--model-path", default=DEFAULT_MODEL)
-    ap.add_argument("--demo", action="store_true", help="跑 3 条真实样例看输出")
+    ap.add_argument("--demo", action="store_true", help="跑真实样例看输出")
     args = ap.parse_args()
     sys.path.insert(0, str(BASE_DIR))
 
-    if not adapter_available(Path(args.adapter)):
+    if not args.no_adapter and not adapter_available(Path(args.adapter)):
         print(f"[x] adapter 不存在或不完整: {args.adapter}")
-        print("    先跑 python training/train_lora.py")
+        print("    先跑 python training/train_lora.py（或加 --no-adapter 只跑基座）")
         return
 
     t0 = time.time()
-    llm = LocalLoRAClient(args.adapter, args.model_path)
+    llm = LocalLoRAClient(None if args.no_adapter else args.adapter, args.model_path)
     print(f"[✓] 模型就绪，加载耗时 {time.time()-t0:.1f}s")
 
     if args.demo:

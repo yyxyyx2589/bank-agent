@@ -4,6 +4,7 @@
   baseline_rag        纯 RAG（只用 search_knowledge 直答，不进 Agent 循环）
   baseline_rag_lora   RAG + LoRA（本地 Qwen2.5-1.5B + 银行域 LoRA，私有化小模型方案）
   baseline_agent      Agent（本项目：Router + Agent 循环 + 工具）
+  另有 baseline_rag_base（消融档：纯基座不挂 adapter，见文末）
 
 六项指标：
   1. 端到端解决率     三基线：答案是否命中标注的期望要点
@@ -17,6 +18,11 @@
   python eval.py --baseline agent --data data/eval_questions.jsonl
   python eval.py --baseline all   # 跑全部三基线，生成 reports/eval_report.json
   python eval.py --baseline all --repeat 3   # 3 次重复，报告稳定性；默认预热排除冷启动
+
+消融实验（验证 LoRA 到底带来了什么）：
+  python eval.py --baseline rag_base --out reports/ablation_base.json
+  # 同链路、同提示，唯一差别是不挂 adapter。「我训了 LoRA」与
+  # 「LoRA 带来了 X 个点」是两件事，后者才经得起追问。
 """
 import argparse
 import json
@@ -183,6 +189,12 @@ def evaluate(baseline: str, data: list, components: dict, verbose: bool = True) 
         elif baseline == "rag_lora":
             out = run_baseline_rag_lora(q, components["rag_tool"], components["lora_llm"])
             tool_scores = {"tool_accuracy": 0, "param_accuracy": 0}
+            # 纯 RAG 没有路由概念：它一律"直答"，不存在查工具/转人工的路径
+            actual_route = "rag_direct"
+        elif baseline == "rag_base":
+            # 消融档：同链路、同提示，只是不挂 adapter（纯基座）
+            out = run_baseline_rag(q, components["rag_tool"], components["base_llm"])
+            tool_scores = {"tool_accuracy": 0, "param_accuracy": 0}
             actual_route = "rag_direct"
         else:
             raise ValueError(f"未知 baseline: {baseline}")
@@ -280,12 +292,16 @@ def stability(runs: list) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline", default="agent",
-                        choices=["agent", "rag", "rag_lora", "all"])
+                        choices=["agent", "rag", "rag_lora", "rag_base", "all"],
+                        help="rag_base = 消融档：同链路同提示，但不挂 adapter（纯基座）")
     parser.add_argument("--data", default=str(DATA_FILE))
     parser.add_argument("--repeat", type=int, default=1,
                         help="重复 N 次并报告稳定性（均值/极差）；N>1 时明细只打第一次")
     parser.add_argument("--no-warmup", action="store_true",
                         help="关闭预热（默认会先跑一次不计入统计的空调用）")
+    parser.add_argument("--out", default=None,
+                        help="报告输出路径（默认 reports/eval_report.json）。"
+                             "消融实验请另指定文件，避免覆盖主报告")
     args = parser.parse_args()
 
     data = load_eval_data(Path(args.data))
@@ -306,23 +322,30 @@ def main():
     router = Router(rag_tool=TOOL_REGISTRY["search_knowledge"], agent=agent)
     components = {
         "llm": llm, "rag_tool": TOOL_REGISTRY["search_knowledge"],
-        "router": router, "lora_llm": None,  # 需要 rag_lora 基线时才加载本地模型
+        "router": router, "lora_llm": None, "base_llm": None,
+        # 两个本地模型都按需加载，不吃不必要的加载时间
     }
 
     baselines = (["agent", "rag", "rag_lora"] if args.baseline == "all"
                  else [args.baseline])
 
-    # 中间基线要的是**真的本地模型**：Qwen2.5-1.5B + 银行域 LoRA（training/out/bank_lora）。
-    # 按需加载 —— 不跑 rag_lora 就不吃这 1.5B 的加载时间。
-    if "rag_lora" in baselines:
+    # 中间基线要的是**真的本地模型**：
+    #   rag_lora = Qwen2.5-1.5B + 银行域 LoRA（training/out/bank_lora）
+    #   rag_base = 同一基座但不挂 adapter —— 消融实验，用来回答
+    #              「这个分数是 LoRA 带来的，还是基座本来就会？」
+    need_local = [b for b in ("rag_lora", "rag_base") if b in baselines]
+    if need_local:
         from training.lora_llm import (LocalLoRAClient, adapter_available,
                                        DEFAULT_ADAPTER)
-        if not adapter_available(Path(DEFAULT_ADAPTER)):
+        if "rag_lora" in need_local and not adapter_available(Path(DEFAULT_ADAPTER)):
             print(f"[x] 缺少银行域 adapter: {DEFAULT_ADAPTER}")
             print("    先跑：python training/build_sft.py && python training/train_lora.py")
             return
-        print("[*] 加载中间基线模型（本地 Qwen2.5-1.5B + bank_lora）…")
-        components["lora_llm"] = LocalLoRAClient()
+        print("[*] 加载本地模型（Qwen2.5-1.5B）…")
+        if "rag_lora" in need_local:
+            components["lora_llm"] = LocalLoRAClient(DEFAULT_ADAPTER)
+        if "rag_base" in need_local:
+            components["base_llm"] = LocalLoRAClient(None)
 
     # 预热：两样东西都要热，否则它们的开销会全部记到第 1 题头上（实测第 1 题 36 秒）——
     #   ① LLM 连接（TLS 握手 / 服务端冷启动）
@@ -335,6 +358,8 @@ def main():
             if components.get("lora_llm"):
                 # 本地模型第一次 generate 还要付 CUDA kernel 预热，一并热掉
                 components["lora_llm"].chat([{"role": "user", "content": "你好"}])
+            if components.get("base_llm"):
+                components["base_llm"].chat([{"role": "user", "content": "你好"}])
             print("已预热（LLM 连接 + embedding 模型 + 本地模型），"
                   "首次冷启动开销不计入延迟统计\n")
         except Exception as e:  # 预热失败不该让整个评估挂掉
@@ -343,6 +368,9 @@ def main():
     if "rag_lora" in baselines:
         print("中间基线 = 本地 Qwen2.5-1.5B + 银行域 LoRA，检索链路与纯 RAG 完全相同，"
               "只把作答模型换成私有化小模型（贪心解码，结果可复现）。")
+    if "rag_base" in baselines:
+        print("消融档 = 同一基座但不挂 adapter（纯 Qwen2.5-1.5B），用来回答"
+              "「这个分数是 LoRA 带来的，还是基座本来就会」。")
     REPORTS_DIR.mkdir(exist_ok=True)
     all_results = {}
 
@@ -366,10 +394,13 @@ def main():
         all_results[bl] = entry
         print(f"  汇总（{args.repeat} 次均值）: {entry['aggregate']}")
 
-    out_file = REPORTS_DIR / "eval_report.json"
+    out_file = Path(args.out) if args.out else (REPORTS_DIR / "eval_report.json")
+    out_file.parent.mkdir(parents=True, exist_ok=True)
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
     print(f"\n报告已写入: {out_file}")
+    if args.out:
+        print("（消融档单独出报告，未覆盖主报告 reports/eval_report.json）")
 
 
 if __name__ == "__main__":
