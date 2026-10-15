@@ -8,7 +8,8 @@
 > 本作品是 `ops-agent`（企业 IT 运维智能体）的**同构换皮**：编排骨架（三级置信度路由 +
 > ReAct 工具循环 + 双编排引擎）完全复用，替换的是知识库、工具集、业务数据与全部话术。
 > 换皮方法论见 [从 ops-agent 到 bank-agent](#从-ops-agent-到-bank-agent同构替换)，
-> 场景选型依据见 [`docs/场景设计.md`](docs/场景设计.md)。
+> 场景选型依据见 [`docs/场景设计.md`](docs/场景设计.md)，
+> 六坑技术复盘长文见 [`docs/技术复盘.md`](docs/技术复盘.md)。
 
 ## 实跑截图
 
@@ -445,7 +446,9 @@ bank-agent/
 ├── reports/eval_report.json    # 评估结果（三基线 × 六指标）
 ├── reports/lora_train.json     # 训练记录（超参 / loss 曲线 / 耗时）
 ├── reports/ablation_base.json  # 消融记录（纯基座不挂 adapter）
-└── docs/场景设计.md             # 场景选型依据（含 2026 年银行 AI 落地公开数据）
+└── docs/
+    ├── 场景设计.md             # 场景选型依据（含 2026 年银行 AI 落地公开数据）
+    ├── 技术复盘.md             # 技术长文：21 题 × 3 基线 × 1 消融 + 六个坑
     └── images/                 # 实跑截图（01 工具循环 / 02 评估报告 / 03 资金安全转接）
 ```
 
