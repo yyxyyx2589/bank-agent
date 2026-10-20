@@ -1,10 +1,14 @@
-openai>=1.0.0
+# 运行环境：复用 D:\miniconda\envs\rag-lora（Python 3.10+）
+# 多 Agent 编排
+langgraph>=1.0.0
+langchain-core>=1.0.0
+openai>=1.0.0          # DeepSeek 走 OpenAI 兼容协议
+# Web 服务
 fastapi>=0.100.0
 uvicorn[standard]>=0.20.0
+# RAG 检索
 chromadb>=0.5.0
 sentence-transformers>=2.2.0
 numpy>=1.24
-# 手工算余弦相似度：ChromaDB 返回的是平方 L2 距离，不是余弦，见 tools/rag_search.py
-# 编排引擎（可选）：AGENT_ENGINE=langgraph 时走 agent_langgraph.py；
-# 不装也能跑，server/cli 是延迟导入，默认引擎仍是 agent.py 手写版。
-langgraph>=1.0.0
+# 测试
+pytest>=7.0.0

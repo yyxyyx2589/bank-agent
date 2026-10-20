@@ -1,6 +1,6 @@
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
 *.egg-info/
 .venv/
 venv/
@@ -9,23 +9,20 @@ venv/
 .env
 config.toml
 
-# 评估产物：保留 eval_report*.json（README 与 /report 页引用），只忽略图片类产物
+# 评估产物（图片类；report.md 在 evals/ 下可入仓）
 reports/*.png
 reports/*.jpg
+reports/
 
 # 个人内容（简历描述等，不进公开仓库）
 docs/简历项目描述.md
 
-# 数据库（可重新生成：python db/init_db.py + python db/init_chroma.py）
-db/*.db
+# 数据库与向量索引（可重新生成：scripts/build_kb.py）
 data/chroma/
+src/db/bank.db
+data/bank.db
 
-# LoRA 训练产物（可重新生成：build_sft.py → train_lora.py，约 6 分钟）
-# 不把 adapter 权重和 tokenized 训练数据放进仓库：
-#   · adapter ~37MB，是二进制权重，放 git 里既撑体积又没有 diff 价值
-#   · bank_sft.jsonl 是 input_ids 的展开形式，几 MB 且完全可由脚本复现
-# 保留 bank_sft_raw.jsonl（人类可读的 messages）—— 它是训练数据的**可审计版本**，
-# 面试时能直接翻给人看「我到底喂了什么给模型」，这个比权重更有说服力。
+# LoRA 训练产物（adapter 权重 ~37MB + tokenized 数据，可重新生成，不入仓）
 training/out/
 data/bank_sft.jsonl
 
